@@ -82,6 +82,22 @@ jobs:
           rm -rf "$tmp"
           echo "Packaged: $(ls -lh $TARBALL | awk '{print $5}')"
 
+      - name: Prune old releases (keep 10 most recent)
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          # Sort by version (highest first), drop the top 10, delete the rest.
+          ls releases/zerotier-one-*-armv7hf.tar.gz 2>/dev/null \
+            | sort -V -r \
+            | tail -n +11 \
+            | tee /tmp/pruned.txt \
+            | xargs -r git rm -f
+          if [ -s /tmp/pruned.txt ]; then
+            echo "Pruned:"
+            cat /tmp/pruned.txt
+          else
+            echo "No old releases to prune."
+          fi
+
       - name: Commit and push
         if: steps.check.outputs.exists == 'false'
         run: |

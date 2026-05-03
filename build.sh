@@ -24,10 +24,13 @@ build_zt_proxy() {
   local tarball="$RELEASES_DIR/zt-proxy-${ZT_PROXY_VERSION}-armv7hf.tar.gz"
   echo ""
   echo "==> Packaging $tarball..."
-  tar -czf "$tarball" \
-    --transform 's|^|zt-proxy/|' \
-    -C "$SCRIPT_DIR/zt-proxy" zt-proxy go.mod main.go \
-    -C "$SCRIPT_DIR" install-zt-proxy.sh
+  local tmp
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/zt-proxy"
+  cp "$SCRIPT_DIR/zt-proxy/zt-proxy" "$tmp/zt-proxy/zt-proxy"
+  cp "$SCRIPT_DIR/install-zt-proxy.sh" "$tmp/zt-proxy/install.sh"
+  tar -czf "$tarball" -C "$tmp" zt-proxy
+  rm -rf "$tmp"
   echo "    Done: $(ls -lh "$tarball" | awk '{print $5}')"
   cd "$SCRIPT_DIR"
 }

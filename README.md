@@ -92,6 +92,8 @@ JetKVM WebUI  (127.0.0.1:80, loopback only)
 
 ZeroTier must be running and have an assigned IP before installing.
 
+> ⚠️ **Don't run this unless you have working SSH access independent of the WebUI.** Once installed, the WebUI is unreachable on LAN. If ZeroTier later breaks (e.g. controller deauthorizes the device, network ID changes, interface fails to come up after a firmware update), the only recovery path is SSH — see [Troubleshooting](#troubleshooting) below.
+
 ```sh
 # Find the latest release
 ls releases/zt-proxy-*-armv7hf.tar.gz
@@ -174,6 +176,61 @@ Or build the binary directly:
 cd zt-proxy
 GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 \
   go build -ldflags="-s -w" -o zt-proxy .
+```
+
+---
+
+## Testing
+
+### zt-proxy unit tests
+
+The Go test suite covers bidirectional forwarding, half-close handling, multiple concurrent connections, and unreachable-target behavior. Run it from the `zt-proxy/` directory on any host with Go 1.22+ — no device or cross-compiler needed:
+
+```sh
+cd zt-proxy
+go test -v ./...
+```
+
+Expected output ends with `PASS` and `ok  zt-proxy`.
+
+To also run `go vet` and a build check:
+
+```sh
+cd zt-proxy
+go vet ./... && go build ./... && go test ./...
+```
+
+### On-device sanity checks (after install)
+
+After running the installers, verify on the device:
+
+```sh
+# 1. ZeroTier is running and joined
+/userdata/bin/zerotier-cli -D/userdata/zerotier-one-data status
+/userdata/bin/zerotier-cli -D/userdata/zerotier-one-data listnetworks
+
+# 2. zt-proxy is running and bound to the ZeroTier IP only
+ps | grep zt-proxy
+netstat -tln | grep ':80 '
+#   Expect:
+#     127.0.0.1:80    (jetkvm_app — loopback only)
+#     <zt-ip>:80      (zt-proxy)
+#   Should NOT see 0.0.0.0:80 anywhere.
+
+# 3. WebUI reachable over ZeroTier, NOT over LAN
+#    From a peer on the ZeroTier network:
+curl -I http://<zt-ip>/
+#    From a host on LAN (should fail / time out):
+curl -I --max-time 3 http://<lan-ip>/
+```
+
+### Init-script smoke test
+
+Confirm the init scripts start, stop, and restart cleanly:
+
+```sh
+/etc/init.d/S50zerotier restart
+/etc/init.d/S51zt-proxy restart
 ```
 
 ---

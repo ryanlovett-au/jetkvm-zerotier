@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"io"
 	"log"
@@ -24,13 +25,20 @@ func main() {
 	}
 	log.Printf("zt-proxy: %s -> %s", *listen, *target)
 
+	serve(ln, *target)
+}
+
+func serve(ln net.Listener, target string) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			log.Printf("Accept error: %v", err)
 			continue
 		}
-		go handle(conn, *target)
+		go handle(conn, target)
 	}
 }
 
@@ -44,7 +52,24 @@ func handle(src net.Conn, target string) {
 	defer dst.Close()
 
 	done := make(chan struct{}, 2)
-	go func() { io.Copy(dst, src); done <- struct{}{} }()
-	go func() { io.Copy(src, dst); done <- struct{}{} }()
+	go func() {
+		io.Copy(dst, src)
+		closeWrite(dst)
+		done <- struct{}{}
+	}()
+	go func() {
+		io.Copy(src, dst)
+		closeWrite(src)
+		done <- struct{}{}
+	}()
 	<-done
+	<-done
+}
+
+// closeWrite half-closes the write side if the connection supports it,
+// so the peer sees EOF without tearing down the read side.
+func closeWrite(c net.Conn) {
+	if cw, ok := c.(interface{ CloseWrite() error }); ok {
+		cw.CloseWrite()
+	}
 }

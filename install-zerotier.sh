@@ -38,6 +38,7 @@ echo "==> [5/5] Installing init script..."
 
 cat > /etc/init.d/S50zerotier << 'INITEOF'
 #!/bin/sh
+set -e
 ZT_HOME=/userdata/zerotier-one-data
 ZT_BIN=/userdata/bin/zerotier-one
 

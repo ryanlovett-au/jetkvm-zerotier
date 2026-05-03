@@ -8,8 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROXY_BIN=/userdata/bin/zt-proxy
 KVM_CONFIG=/userdata/kvm_config.json
 
-# Detect whichever ZeroTier interface is up (name always starts with 'zt')
-ZT_IFACE=$(ip link | grep -o 'zt[a-z0-9]*' | head -1)
+# Detect ZeroTier interface (name is 'zt' followed by 8 hex chars)
+ZT_IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^zt[a-f0-9]{8}$' | head -1)
 ZT_IP=$(ip addr show "$ZT_IFACE" 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
 if [ -z "$ZT_IP" ]; then
   echo "ERROR: No ZeroTier interface with an IP found."
@@ -30,15 +30,16 @@ echo ""
 echo "==> [2/4] Installing init script..."
 cat > /etc/init.d/S51zt-proxy << 'INITEOF'
 #!/bin/sh
+set -e
 PROXY_BIN=/userdata/bin/zt-proxy
 
 case "$1" in
   start)
     echo "Starting zt-proxy..."
-    # Wait up to 30s for any ZeroTier interface with an assigned IP
+    # Wait up to 30s for a ZeroTier interface with an assigned IP
     ZT_IP=""
     for i in $(seq 1 30); do
-      ZT_IFACE=$(ip link | grep -o 'zt[a-z0-9]*' | head -1)
+      ZT_IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -E '^zt[a-f0-9]{8}$' | head -1)
       if [ -n "$ZT_IFACE" ]; then
         ZT_IP=$(ip addr show "$ZT_IFACE" | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
         [ -n "$ZT_IP" ] && break
@@ -71,18 +72,35 @@ cp /etc/init.d/S51zt-proxy /userdata/bin/S51zt-proxy
 echo ""
 echo "==> [3/4] Setting JetKVM WebUI to loopback-only..."
 if [ ! -f "$KVM_CONFIG" ]; then
-  echo "    WARNING: $KVM_CONFIG not found — skipping."
-else
-  cp "$KVM_CONFIG" "${KVM_CONFIG}.bak.ztproxy"
-  # Handle both false->true and missing field cases
-  if grep -q '"local_loopback_only"' "$KVM_CONFIG"; then
-    sed -i 's/"local_loopback_only": false/"local_loopback_only": true/' "$KVM_CONFIG"
-  else
-    sed -i 's/{/{\"local_loopback_only\": true, /' "$KVM_CONFIG"
-  fi
-  echo "    Config updated:"
-  grep local_loopback "$KVM_CONFIG" || echo "    (field not found after edit — check manually)"
+  echo "    ERROR: $KVM_CONFIG not found — aborting."
+  echo "           Without local_loopback_only=true the WebUI stays exposed on LAN."
+  exit 1
 fi
+
+# Timestamped backup so re-runs don't clobber the original.
+BACKUP="${KVM_CONFIG}.bak.ztproxy.$(date +%Y%m%d-%H%M%S)"
+cp "$KVM_CONFIG" "$BACKUP"
+echo "    Backup: $BACKUP"
+
+# Handle false-with-any-spacing, true (no-op), and missing-field cases.
+if grep -Eq '"local_loopback_only"[[:space:]]*:[[:space:]]*true' "$KVM_CONFIG"; then
+  echo "    Already loopback-only — no edit needed."
+elif grep -Eq '"local_loopback_only"[[:space:]]*:[[:space:]]*false' "$KVM_CONFIG"; then
+  sed -i -E 's/"local_loopback_only"[[:space:]]*:[[:space:]]*false/"local_loopback_only": true/' "$KVM_CONFIG"
+else
+  # Insert immediately after the opening brace of the root object.
+  sed -i 's/^{/{"local_loopback_only": true, /' "$KVM_CONFIG"
+fi
+
+# Verify — abort loudly if loopback-only didn't take, since this is the only
+# thing keeping the WebUI off the LAN once the proxy is up.
+if ! grep -Eq '"local_loopback_only"[[:space:]]*:[[:space:]]*true' "$KVM_CONFIG"; then
+  echo "    ERROR: failed to set local_loopback_only=true in $KVM_CONFIG"
+  echo "           Restoring backup and aborting."
+  cp "$BACKUP" "$KVM_CONFIG"
+  exit 1
+fi
+echo "    Config verified: $(grep -E '"local_loopback_only"[^,}]*' "$KVM_CONFIG")"
 
 echo ""
 echo "==> [4/4] Updating /userdata/bin/zt-reinstall.sh to include zt-proxy..."
@@ -111,9 +129,20 @@ chmod +x /userdata/bin/zt-reinstall.sh
 
 echo ""
 echo "==> Restarting JetKVM app..."
-killall jetkvm_app 2>/dev/null || true
-sleep 2
-start-stop-daemon -S -b -x /userdata/jetkvm/bin/jetkvm_app
+JETKVM_BIN=/userdata/jetkvm/bin/jetkvm_app
+# Stop and wait for the old process to actually exit before starting a new
+# one — otherwise both can race to bind 127.0.0.1:80.
+start-stop-daemon -K -x "$JETKVM_BIN" 2>/dev/null || killall jetkvm_app 2>/dev/null || true
+for i in $(seq 1 10); do
+  pidof jetkvm_app >/dev/null 2>&1 || break
+  sleep 1
+done
+if pidof jetkvm_app >/dev/null 2>&1; then
+  echo "    WARNING: jetkvm_app still running after 10s — forcing kill"
+  killall -9 jetkvm_app 2>/dev/null || true
+  sleep 1
+fi
+start-stop-daemon -S -b -x "$JETKVM_BIN"
 
 echo ""
 echo "==> Starting zt-proxy..."
