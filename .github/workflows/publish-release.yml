@@ -1,0 +1,66 @@
+name: Publish ZeroTier GitHub release
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'  # Every Monday at 08:00 UTC (2h after update-zerotier)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find latest ZeroTier tarball
+        id: latest
+        run: |
+          TARBALL=$(ls releases/zerotier-one-*-armv7hf.tar.gz 2>/dev/null | sort -V | tail -1)
+          if [ -z "$TARBALL" ]; then
+            echo "ERROR: No ZeroTier tarballs found in releases/"
+            exit 1
+          fi
+          # Extract version from filename: zerotier-one-X.Y.Z-armv7hf.tar.gz
+          FILENAME=$(basename "$TARBALL")
+          VERSION="${FILENAME#zerotier-one-}"
+          VERSION="${VERSION%-armv7hf.tar.gz}"
+          TAG="zerotier-one-${VERSION}"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "Latest: $TARBALL (version: $VERSION, tag: $TAG)"
+
+      - name: Check if release already exists
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=${{ steps.latest.outputs.tag }}
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG already exists — nothing to do."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No release for $TAG — will create."
+          fi
+
+      - name: Create GitHub release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${{ steps.latest.outputs.version }}
+          TAG=${{ steps.latest.outputs.tag }}
+          TARBALL=${{ steps.latest.outputs.tarball }}
+
+          gh release create "$TAG" \
+            --title "ZeroTier ${VERSION} for JetKVM (ARMv7hf)" \
+            --notes "Static ZeroTier ${VERSION} binary for JetKVM (ARMv7 hard-float, statically linked, uClibc-compatible).
+
+See the [README](https://github.com/${GITHUB_REPOSITORY}#install-zerotier-on-jetkvm) for install instructions." \
+            "$TARBALL"
+
+          echo "Published: $TAG"
