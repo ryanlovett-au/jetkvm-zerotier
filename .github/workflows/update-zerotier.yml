@@ -1,0 +1,93 @@
+name: Update ZeroTier build
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get latest ZeroTier release
+        id: zt_latest
+        run: |
+          TAG=$(curl -sf https://api.github.com/repos/zerotier/ZeroTierOne/releases/latest \
+            | jq -r .tag_name)
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "ERROR: Could not fetch latest ZeroTier release"
+            exit 1
+          fi
+          # Strip leading 'v' if present for consistent tarball naming
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"     >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Latest ZeroTier: $VERSION (tag: $TAG)"
+
+      - name: Check if release already exists
+        id: check
+        run: |
+          VERSION=${{ steps.zt_latest.outputs.version }}
+          TARBALL="releases/zerotier-one-${VERSION}-armv7hf.tar.gz"
+          if [ -f "$TARBALL" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Already have $TARBALL — nothing to do."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "New version $VERSION — will build."
+          fi
+
+      - name: Install ARM cross-compiler
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+
+      - name: Clone ZeroTier
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          git clone --depth=1 --branch ${{ steps.zt_latest.outputs.tag }} \
+            https://github.com/zerotier/ZeroTierOne.git
+
+      - name: Build ZeroTier for ARMv7hf
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          cd ZeroTierOne
+          make -j$(nproc) \
+            CC=arm-linux-gnueabihf-gcc \
+            CXX=arm-linux-gnueabihf-g++ \
+            CFLAGS="-march=armv7-a -mfpu=vfpv3 -mfloat-abi=hard -Os" \
+            CXXFLAGS="-march=armv7-a -mfpu=vfpv3 -mfloat-abi=hard -Os" \
+            LDFLAGS="-static" \
+            ZT_STATIC=1
+          arm-linux-gnueabihf-strip zerotier-one
+          file zerotier-one
+
+      - name: Package tarball
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          VERSION=${{ steps.zt_latest.outputs.version }}
+          TARBALL="releases/zerotier-one-${VERSION}-armv7hf.tar.gz"
+          tmp=$(mktemp -d)
+          mkdir "$tmp/jetkvm-zerotier"
+          cp ZeroTierOne/zerotier-one "$tmp/jetkvm-zerotier/zerotier-one"
+          cp install-zerotier.sh "$tmp/jetkvm-zerotier/install.sh"
+          tar -czf "$TARBALL" -C "$tmp" jetkvm-zerotier
+          rm -rf "$tmp"
+          echo "Packaged: $(ls -lh $TARBALL | awk '{print $5}')"
+
+      - name: Commit and push
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          VERSION=${{ steps.zt_latest.outputs.version }}
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "releases/zerotier-one-${VERSION}-armv7hf.tar.gz"
+          git commit -m "chore: add ZeroTier ${VERSION} ARMv7hf build"
+          git push
