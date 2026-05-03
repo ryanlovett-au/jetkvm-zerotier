@@ -13,3 +13,9 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+
+# Compiled zt-proxy binary (built by build.sh, not committed)
+zt-proxy/zt-proxy
+
+# macOS metadata
+.DS_Store

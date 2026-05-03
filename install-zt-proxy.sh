@@ -1,0 +1,135 @@
+#!/bin/sh
+# zt-proxy installer for JetKVM
+# Restricts WebUI access to ZeroTier interface only.
+# Run after ZeroTier is installed, joined, and the ZT interface is up.
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROXY_BIN=/userdata/bin/zt-proxy
+KVM_CONFIG=/userdata/kvm_config.json
+
+# Detect whichever ZeroTier interface is up (name always starts with 'zt')
+ZT_IFACE=$(ip link | grep -o 'zt[a-z0-9]*' | head -1)
+ZT_IP=$(ip addr show "$ZT_IFACE" 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
+if [ -z "$ZT_IP" ]; then
+  echo "ERROR: No ZeroTier interface with an IP found."
+  echo "       Make sure ZeroTier is running and joined to your network."
+  exit 1
+fi
+echo ""
+echo "  Detected ZeroTier IP: $ZT_IP (interface: $ZT_IFACE)"
+
+echo ""
+echo "==> [1/4] Installing zt-proxy binary..."
+mkdir -p /userdata/bin
+cp "$SCRIPT_DIR/zt-proxy" "$PROXY_BIN"
+chmod +x "$PROXY_BIN"
+echo "    Installed: $PROXY_BIN"
+
+echo ""
+echo "==> [2/4] Installing init script..."
+cat > /etc/init.d/S51zt-proxy << 'INITEOF'
+#!/bin/sh
+PROXY_BIN=/userdata/bin/zt-proxy
+
+case "$1" in
+  start)
+    echo "Starting zt-proxy..."
+    # Wait up to 30s for any ZeroTier interface with an assigned IP
+    ZT_IP=""
+    for i in $(seq 1 30); do
+      ZT_IFACE=$(ip link | grep -o 'zt[a-z0-9]*' | head -1)
+      if [ -n "$ZT_IFACE" ]; then
+        ZT_IP=$(ip addr show "$ZT_IFACE" | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
+        [ -n "$ZT_IP" ] && break
+      fi
+      sleep 1
+    done
+    if [ -z "$ZT_IP" ]; then
+      echo "zt-proxy: no ZeroTier interface found after 30s, aborting"
+      exit 1
+    fi
+    echo "zt-proxy: binding $ZT_IP:80 -> 127.0.0.1:80"
+    start-stop-daemon -S -b -x "$PROXY_BIN" -- -listen "$ZT_IP:80" -target "127.0.0.1:80"
+    ;;
+  stop)
+    echo "Stopping zt-proxy..."
+    start-stop-daemon -K -x "$PROXY_BIN" 2>/dev/null || killall zt-proxy 2>/dev/null || true
+    ;;
+  restart)
+    $0 stop; sleep 1; $0 start
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+    ;;
+esac
+INITEOF
+chmod +x /etc/init.d/S51zt-proxy
+cp /etc/init.d/S51zt-proxy /userdata/bin/S51zt-proxy
+
+echo ""
+echo "==> [3/4] Setting JetKVM WebUI to loopback-only..."
+if [ ! -f "$KVM_CONFIG" ]; then
+  echo "    WARNING: $KVM_CONFIG not found — skipping."
+else
+  cp "$KVM_CONFIG" "${KVM_CONFIG}.bak.ztproxy"
+  # Handle both false->true and missing field cases
+  if grep -q '"local_loopback_only"' "$KVM_CONFIG"; then
+    sed -i 's/"local_loopback_only": false/"local_loopback_only": true/' "$KVM_CONFIG"
+  else
+    sed -i 's/{/{\"local_loopback_only\": true, /' "$KVM_CONFIG"
+  fi
+  echo "    Config updated:"
+  grep local_loopback "$KVM_CONFIG" || echo "    (field not found after edit — check manually)"
+fi
+
+echo ""
+echo "==> [4/4] Updating /userdata/bin/zt-reinstall.sh to include zt-proxy..."
+cat > /userdata/bin/zt-reinstall.sh << 'REINSTALLEOF'
+#!/bin/sh
+# Run after a firmware update to restore ZeroTier and zt-proxy init scripts.
+echo "==> Restoring ZeroTier init script..."
+cp /userdata/bin/S50zerotier /etc/init.d/S50zerotier
+chmod +x /etc/init.d/S50zerotier
+
+echo "==> Restoring zt-proxy init script..."
+cp /userdata/bin/S51zt-proxy /etc/init.d/S51zt-proxy
+chmod +x /etc/init.d/S51zt-proxy
+
+echo "==> Starting ZeroTier..."
+/etc/init.d/S50zerotier start
+sleep 3
+
+echo "==> Starting zt-proxy..."
+/etc/init.d/S51zt-proxy start
+
+/userdata/bin/zerotier-cli -D/userdata/zerotier-one-data status
+echo "Done."
+REINSTALLEOF
+chmod +x /userdata/bin/zt-reinstall.sh
+
+echo ""
+echo "==> Restarting JetKVM app..."
+killall jetkvm_app 2>/dev/null || true
+sleep 2
+start-stop-daemon -S -b -x /userdata/jetkvm/bin/jetkvm_app
+
+echo ""
+echo "==> Starting zt-proxy..."
+/etc/init.d/S51zt-proxy start
+sleep 1
+
+echo ""
+echo "=========================================="
+echo " Done!"
+echo "=========================================="
+echo ""
+echo "  WebUI is now only accessible via ZeroTier:"
+echo "    http://$ZT_IP"
+echo ""
+echo "  LAN access to port 80 is no longer available."
+echo ""
+echo "  After a firmware update, restore everything with:"
+echo "    sh /userdata/bin/zt-reinstall.sh"
+echo ""
