@@ -42,9 +42,15 @@ Pre-built tarballs are in [`releases/`](releases/). The steps below use them dir
 
 ```sh
 # On your local machine — transfer the tarball
-base64 releases/zerotier-one-1.16.0-armv7hf.tar.gz \
+# macOS: base64 requires -i for input file
+base64 -i releases/zerotier-one-1.16.0-armv7hf.tar.gz \
   | ssh -i ~/.ssh/your-key root@<LAN-IP> \
     "base64 -d > /tmp/zerotier-one-armv7hf.tar.gz"
+
+# Linux: positional argument works
+# base64 releases/zerotier-one-1.16.0-armv7hf.tar.gz \
+#   | ssh -i ~/.ssh/your-key root@<LAN-IP> \
+#     "base64 -d > /tmp/zerotier-one-armv7hf.tar.gz"
 
 # On the device
 ssh -i ~/.ssh/your-key root@<LAN-IP>
@@ -80,9 +86,15 @@ You should see an `inet` address before continuing.
 
 ```sh
 # On your local machine
-base64 releases/zt-proxy-v1.0.0-armv7hf.tar.gz \
+# macOS: base64 requires -i for input file
+base64 -i releases/zt-proxy-v1.0.0-armv7hf.tar.gz \
   | ssh -i ~/.ssh/your-key root@<LAN-IP> \
     "base64 -d > /tmp/zt-proxy-armv7hf.tar.gz"
+
+# Linux: positional argument works
+# base64 releases/zt-proxy-v1.0.0-armv7hf.tar.gz \
+#   | ssh -i ~/.ssh/your-key root@<LAN-IP> \
+#     "base64 -d > /tmp/zt-proxy-armv7hf.tar.gz"
 
 # On the device
 cd /tmp
