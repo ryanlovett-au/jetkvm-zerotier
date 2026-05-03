@@ -56,11 +56,15 @@ jobs:
           TAG=${{ steps.latest.outputs.tag }}
           TARBALL=${{ steps.latest.outputs.tarball }}
 
+          cat > /tmp/release-notes.md << EOF
+Static ZeroTier ${VERSION} binary for JetKVM (ARMv7 hard-float, statically linked, uClibc-compatible).
+
+See the [README](https://github.com/${GITHUB_REPOSITORY}#install-zerotier-on-jetkvm) for install instructions.
+EOF
+
           gh release create "$TAG" \
             --title "ZeroTier ${VERSION} for JetKVM (ARMv7hf)" \
-            --notes "Static ZeroTier ${VERSION} binary for JetKVM (ARMv7 hard-float, statically linked, uClibc-compatible).
-
-See the [README](https://github.com/${GITHUB_REPOSITORY}#install-zerotier-on-jetkvm) for install instructions." \
+            --notes-file /tmp/release-notes.md \
             "$TARBALL"
 
           echo "Published: $TAG"
