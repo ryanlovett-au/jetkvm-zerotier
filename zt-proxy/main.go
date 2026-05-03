@@ -10,9 +10,13 @@ import (
 )
 
 func main() {
-	listen := flag.String("listen", "10.107.107.245:80", "Address to listen on (ZeroTier IP:port)")
+	listen := flag.String("listen", "", "Address to listen on, e.g. 10.x.x.x:80 (required)")
 	target := flag.String("target", "127.0.0.1:80", "Address to forward to")
 	flag.Parse()
+
+	if *listen == "" {
+		log.Fatal("Usage: zt-proxy -listen <IP:port> [-target <IP:port>]")
+	}
 
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
